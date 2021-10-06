@@ -63,13 +63,13 @@ type GinJWTMiddleware struct {
 	Unauthorized func(c *gin.Context, code int, message string)
 
 	// User can define own LoginResponse func.
-	LoginResponse func(c *gin.Context, code int, message string, time time.Time)
+	LoginResponse func(c *gin.Context, code int, token string, refresh_token string, time time.Time)
 
 	// User can define own LogoutResponse func.
 	LogoutResponse func(c *gin.Context, code int)
 
 	// User can define own RefreshResponse func.
-	RefreshResponse func(c *gin.Context, code int, message string, time time.Time)
+	RefreshResponse func(c *gin.Context, code int, message string, refreshToken string, time time.Time)
 
 	// Set the identity handler function
 	IdentityHandler func(*gin.Context) interface{}
@@ -106,7 +106,7 @@ type GinJWTMiddleware struct {
 
 	// Public key file for asymmetric algorithms
 	PubKeyFile string
-	
+
 	// Private key passphrase
 	PrivateKeyPassphrase string
 
@@ -243,16 +243,15 @@ func (mw *GinJWTMiddleware) privateKey() error {
 		}
 		keyData = filecontent
 	}
-	
-	if mw.PrivateKeyPassphrase != "" {
-		key, err := jwt.ParseRSAPrivateKeyFromPEMWithPassword(keyData, mw.PrivateKeyPassphrase)
-		if err != nil {
-			return ErrInvalidPrivKey
-		}
-		mw.privKey = key
-		return nil
-	}
 
+	// if mw.PrivateKeyPassphrase != "" {
+	// 	key, err := jwt.ParseRSAPrivateKeyFromPEMWithPassword(keyData, mw.PrivateKeyPassphrase)
+	// 	if err != nil {
+	// 		return ErrInvalidPrivKey
+	// 	}
+	// 	mw.privKey = key
+	// 	return nil
+	// }
 
 	key, err := jwt.ParseRSAPrivateKeyFromPEM(keyData)
 	if err != nil {
@@ -330,11 +329,12 @@ func (mw *GinJWTMiddleware) MiddlewareInit() error {
 	}
 
 	if mw.LoginResponse == nil {
-		mw.LoginResponse = func(c *gin.Context, code int, token string, expire time.Time) {
+		mw.LoginResponse = func(c *gin.Context, code int, token string, refresh_token string, expire time.Time) {
 			c.JSON(http.StatusOK, gin.H{
-				"code":   http.StatusOK,
-				"token":  token,
-				"expire": expire.Format(time.RFC3339),
+				"code":          http.StatusOK,
+				"token":         token,
+				"refresh_token": refresh_token,
+				//"expire":        expire.Format(time.RFC3339),
 			})
 		}
 	}
@@ -348,11 +348,12 @@ func (mw *GinJWTMiddleware) MiddlewareInit() error {
 	}
 
 	if mw.RefreshResponse == nil {
-		mw.RefreshResponse = func(c *gin.Context, code int, token string, expire time.Time) {
+		mw.RefreshResponse = func(c *gin.Context, code int, token string, refreshToken string, expire time.Time) {
 			c.JSON(http.StatusOK, gin.H{
-				"code":   http.StatusOK,
-				"token":  token,
-				"expire": expire.Format(time.RFC3339),
+				"code":          http.StatusOK,
+				"token":         token,
+				"refresh_token": refreshToken,
+				//"expire": expire.Format(time.RFC3339),
 			})
 		}
 	}
@@ -498,6 +499,16 @@ func (mw *GinJWTMiddleware) LoginHandler(c *gin.Context) {
 		return
 	}
 
+	refreshExpire := mw.TimeFunc().Add(mw.MaxRefresh)
+	claims["exp"] = refreshExpire.Unix()
+	claims["orig_iat"] = mw.TimeFunc().Unix()
+	refreshTokenString, err := mw.signedString(token)
+
+	if err != nil {
+		mw.unauthorized(c, http.StatusUnauthorized, mw.HTTPStatusMessageFunc(ErrFailedTokenCreation, c))
+		return
+	}
+
 	// set cookie
 	if mw.SendCookie {
 		expireCookie := mw.TimeFunc().Add(mw.CookieMaxAge)
@@ -518,7 +529,7 @@ func (mw *GinJWTMiddleware) LoginHandler(c *gin.Context) {
 		)
 	}
 
-	mw.LoginResponse(c, http.StatusOK, tokenString, expire)
+	mw.LoginResponse(c, http.StatusOK, tokenString, refreshTokenString, expire)
 }
 
 // LogoutHandler can be used by clients to remove the jwt cookie (if set)
@@ -558,20 +569,20 @@ func (mw *GinJWTMiddleware) signedString(token *jwt.Token) (string, error) {
 // Shall be put under an endpoint that is using the GinJWTMiddleware.
 // Reply will be of the form {"token": "TOKEN"}.
 func (mw *GinJWTMiddleware) RefreshHandler(c *gin.Context) {
-	tokenString, expire, err := mw.RefreshToken(c)
+	tokenString, refreshTokenString, expire, err := mw.RefreshToken(c)
 	if err != nil {
 		mw.unauthorized(c, http.StatusUnauthorized, mw.HTTPStatusMessageFunc(err, c))
 		return
 	}
 
-	mw.RefreshResponse(c, http.StatusOK, tokenString, expire)
+	mw.RefreshResponse(c, http.StatusOK, tokenString, refreshTokenString, expire)
 }
 
 // RefreshToken refresh token and check if token is expired
-func (mw *GinJWTMiddleware) RefreshToken(c *gin.Context) (string, time.Time, error) {
+func (mw *GinJWTMiddleware) RefreshToken(c *gin.Context) (string, string, time.Time, error) {
 	claims, err := mw.CheckIfTokenExpire(c)
 	if err != nil {
-		return "", time.Now(), err
+		return "", "", time.Now(), err
 	}
 
 	// Create the token
@@ -586,9 +597,17 @@ func (mw *GinJWTMiddleware) RefreshToken(c *gin.Context) (string, time.Time, err
 	newClaims["exp"] = expire.Unix()
 	newClaims["orig_iat"] = mw.TimeFunc().Unix()
 	tokenString, err := mw.signedString(newToken)
+	if err != nil {
+		return "", tokenString, time.Now(), err
+	}
+
+	refreshExpire := mw.TimeFunc().Add(mw.MaxRefresh)
+	newClaims["exp"] = refreshExpire.Unix()
+	newClaims["orig_iat"] = mw.TimeFunc().Unix()
+	refreshTokenString, err := mw.signedString(newToken)
 
 	if err != nil {
-		return "", time.Now(), err
+		return "", refreshTokenString, time.Now(), err
 	}
 
 	// set cookie
@@ -611,7 +630,7 @@ func (mw *GinJWTMiddleware) RefreshToken(c *gin.Context) (string, time.Time, err
 		)
 	}
 
-	return tokenString, expire, nil
+	return tokenString, refreshTokenString, expire, nil
 }
 
 // CheckIfTokenExpire check if token expire

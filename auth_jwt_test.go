@@ -249,7 +249,7 @@ func TestLoginHandler(t *testing.T) {
 		Authorizator: func(user interface{}, c *gin.Context) bool {
 			return true
 		},
-		LoginResponse: func(c *gin.Context, code int, token string, t time.Time) {
+		LoginResponse: func(c *gin.Context, code int, token string, refreshToken string, t time.Time) {
 			cookie, err := c.Cookie("jwt")
 			if err != nil {
 				log.Println(err)
@@ -435,7 +435,7 @@ func TestRefreshHandlerRS256(t *testing.T) {
 		SendCookie:       true,
 		CookieName:       "jwt",
 		Authenticator:    defaultAuthenticator,
-		RefreshResponse: func(c *gin.Context, code int, token string, t time.Time) {
+		RefreshResponse: func(c *gin.Context, code int, token string, refreshToken string, t time.Time) {
 			cookie, err := c.Cookie("jwt")
 			if err != nil {
 				log.Println(err)
