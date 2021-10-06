@@ -21,6 +21,13 @@ type MapClaims map[string]interface{}
 // c.Get("userID").(string).
 // Users can get a token by posting a json request to LoginHandler. The token then needs to be passed in
 // the Authentication header. Example: Authorization:Bearer XXX_TOKEN_XXX
+type KeyType int
+
+const (
+	AccessKey KeyType = iota
+	RefreshKey
+)
+
 type GinJWTMiddleware struct {
 	// Realm name to display to the user. Required.
 	Realm string
@@ -31,6 +38,8 @@ type GinJWTMiddleware struct {
 
 	// Secret key used for signing. Required.
 	Key []byte
+
+	RefreshKey []byte
 
 	// Duration that a jwt token is valid. Optional, defaults to one hour.
 	Timeout time.Duration
@@ -443,7 +452,7 @@ func (mw *GinJWTMiddleware) middlewareImpl(c *gin.Context) {
 
 // GetClaimsFromJWT get claims from JWT token
 func (mw *GinJWTMiddleware) GetClaimsFromJWT(c *gin.Context) (MapClaims, error) {
-	token, err := mw.ParseToken(c)
+	token, err := mw.ParseToken(AccessKey, c)
 
 	if err != nil {
 		return nil, err
@@ -635,7 +644,7 @@ func (mw *GinJWTMiddleware) RefreshToken(c *gin.Context) (string, string, time.T
 
 // CheckIfTokenExpire check if token expire
 func (mw *GinJWTMiddleware) CheckIfTokenExpire(c *gin.Context) (jwt.MapClaims, error) {
-	token, err := mw.ParseToken(c)
+	token, err := mw.ParseToken(RefreshKey, c)
 
 	if err != nil {
 		// If we receive an error, and the error is anything other than a single
@@ -728,7 +737,7 @@ func (mw *GinJWTMiddleware) jwtFromParam(c *gin.Context, key string) (string, er
 }
 
 // ParseToken parse jwt token from gin context
-func (mw *GinJWTMiddleware) ParseToken(c *gin.Context) (*jwt.Token, error) {
+func (mw *GinJWTMiddleware) ParseToken(keyType KeyType, c *gin.Context) (*jwt.Token, error) {
 	var token string
 	var err error
 
@@ -766,7 +775,9 @@ func (mw *GinJWTMiddleware) ParseToken(c *gin.Context) (*jwt.Token, error) {
 
 		// save token string if vaild
 		c.Set("JWT_TOKEN", token)
-
+		if keyType == RefreshKey {
+			return mw.RefreshKey, nil
+		}
 		return mw.Key, nil
 	})
 }
