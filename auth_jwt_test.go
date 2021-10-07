@@ -27,6 +27,7 @@ type Login struct {
 
 var (
 	key                  = []byte("secret key")
+	refreshKey           = []byte("refresh key")
 	defaultAuthenticator = func(c *gin.Context) (interface{}, error) {
 		var loginVals Login
 		userID := loginVals.Username
@@ -62,6 +63,28 @@ func makeTokenString(SigningAlgorithm string, username string) string {
 	return tokenString
 }
 
+func makeRefreshTokenString(SigningAlgorithm string, username string) string {
+	if SigningAlgorithm == "" {
+		SigningAlgorithm = "HS256"
+	}
+
+	token := jwt.New(jwt.GetSigningMethod(SigningAlgorithm))
+	claims := token.Claims.(jwt.MapClaims)
+	claims["identity"] = username
+	claims["exp"] = time.Now().Add(time.Hour).Unix()
+	claims["orig_iat"] = time.Now().Unix()
+	var tokenString string
+	if SigningAlgorithm == "RS256" {
+		keyData, _ := ioutil.ReadFile("testdata/jwtRS256.key")
+		signKey, _ := jwt.ParseRSAPrivateKeyFromPEM(keyData)
+		tokenString, _ = token.SignedString(signKey)
+	} else {
+		tokenString, _ = token.SignedString(refreshKey)
+	}
+
+	return tokenString
+}
+
 func TestMissingKey(t *testing.T) {
 
 	_, err := New(&GinJWTMiddleware{
@@ -73,6 +96,21 @@ func TestMissingKey(t *testing.T) {
 
 	assert.Error(t, err)
 	assert.Equal(t, ErrMissingSecretKey, err)
+	assert.Equal(t, ErrMissingRefreshSecretKey, err)
+}
+
+func TestMissingRefreshKey(t *testing.T) {
+
+	_, err := New(&GinJWTMiddleware{
+		Realm:         "test zone",
+		Key:           []byte("hello"),
+		Timeout:       time.Hour,
+		MaxRefresh:    time.Hour * 24,
+		Authenticator: defaultAuthenticator,
+	})
+
+	assert.Error(t, err)
+	assert.Equal(t, ErrMissingRefreshSecretKey, err)
 }
 
 func TestMissingPrivKey(t *testing.T) {
@@ -200,6 +238,7 @@ func TestMissingAuthenticatorForLoginHandler(t *testing.T) {
 	authMiddleware, err := New(&GinJWTMiddleware{
 		Realm:      "test zone",
 		Key:        key,
+		RefreshKey: refreshKey,
 		Timeout:    time.Hour,
 		MaxRefresh: time.Hour * 24,
 	})
@@ -228,8 +267,9 @@ func TestLoginHandler(t *testing.T) {
 	cookieName := "jwt"
 	cookieDomain := "example.com"
 	authMiddleware, err := New(&GinJWTMiddleware{
-		Realm: "test zone",
-		Key:   key,
+		Realm:      "test zone",
+		Key:        key,
+		RefreshKey: refreshKey,
 		PayloadFunc: func(data interface{}) MapClaims {
 			// Set custom claim, to be checked in Authorizator method
 			return MapClaims{"testkey": "testval", "exp": 0}
@@ -330,6 +370,7 @@ func TestParseToken(t *testing.T) {
 	authMiddleware, _ := New(&GinJWTMiddleware{
 		Realm:         "test zone",
 		Key:           key,
+		RefreshKey:    refreshKey,
 		Timeout:       time.Hour,
 		MaxRefresh:    time.Hour * 24,
 		Authenticator: defaultAuthenticator,
@@ -366,6 +407,14 @@ func TestParseToken(t *testing.T) {
 	r.GET("/auth/hello").
 		SetHeader(gofight.H{
 			"Authorization": "Bearer " + makeTokenString("HS256", "admin"),
+		}).
+		Run(handler, func(r gofight.HTTPResponse, rq gofight.HTTPRequest) {
+			assert.Equal(t, http.StatusOK, r.Code)
+		})
+
+	r.GET("/auth/hello").
+		SetHeader(gofight.H{
+			"Authorization": "Bearer " + makeRefreshTokenString("HS256", "admin"),
 		}).
 		Run(handler, func(r gofight.HTTPResponse, rq gofight.HTTPRequest) {
 			assert.Equal(t, http.StatusOK, r.Code)

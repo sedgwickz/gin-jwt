@@ -162,6 +162,8 @@ var (
 	// ErrMissingSecretKey indicates Secret key is required
 	ErrMissingSecretKey = errors.New("secret key is required")
 
+	ErrMissingRefreshSecretKey = errors.New("refresh secret key is required")
+
 	// ErrForbidden when HTTP status 403 is given
 	ErrForbidden = errors.New("you don't have permission to access this resource")
 
@@ -403,6 +405,10 @@ func (mw *GinJWTMiddleware) MiddlewareInit() error {
 	if mw.Key == nil {
 		return ErrMissingSecretKey
 	}
+
+	if mw.RefreshKey == nil {
+		return ErrMissingRefreshSecretKey
+	}
 	return nil
 }
 
@@ -501,7 +507,7 @@ func (mw *GinJWTMiddleware) LoginHandler(c *gin.Context) {
 	expire := mw.TimeFunc().Add(mw.Timeout)
 	claims["exp"] = expire.Unix()
 	claims["orig_iat"] = mw.TimeFunc().Unix()
-	tokenString, err := mw.signedString(token)
+	tokenString, err := mw.signedString(AccessKey, token)
 
 	if err != nil {
 		mw.unauthorized(c, http.StatusUnauthorized, mw.HTTPStatusMessageFunc(ErrFailedTokenCreation, c))
@@ -511,7 +517,7 @@ func (mw *GinJWTMiddleware) LoginHandler(c *gin.Context) {
 	refreshExpire := mw.TimeFunc().Add(mw.MaxRefresh)
 	claims["exp"] = refreshExpire.Unix()
 	claims["orig_iat"] = mw.TimeFunc().Unix()
-	refreshTokenString, err := mw.signedString(token)
+	refreshTokenString, err := mw.signedString(RefreshKey, token)
 
 	if err != nil {
 		mw.unauthorized(c, http.StatusUnauthorized, mw.HTTPStatusMessageFunc(ErrFailedTokenCreation, c))
@@ -563,13 +569,17 @@ func (mw *GinJWTMiddleware) LogoutHandler(c *gin.Context) {
 	mw.LogoutResponse(c, http.StatusOK)
 }
 
-func (mw *GinJWTMiddleware) signedString(token *jwt.Token) (string, error) {
+func (mw *GinJWTMiddleware) signedString(keyType KeyType, token *jwt.Token) (string, error) {
 	var tokenString string
 	var err error
 	if mw.usingPublicKeyAlgo() {
 		tokenString, err = token.SignedString(mw.privKey)
 	} else {
-		tokenString, err = token.SignedString(mw.Key)
+		if keyType == RefreshKey {
+			tokenString, err = token.SignedString(mw.RefreshKey)
+		} else {
+			tokenString, err = token.SignedString(mw.Key)
+		}
 	}
 	return tokenString, err
 }
@@ -605,7 +615,7 @@ func (mw *GinJWTMiddleware) RefreshToken(c *gin.Context) (string, string, time.T
 	expire := mw.TimeFunc().Add(mw.Timeout)
 	newClaims["exp"] = expire.Unix()
 	newClaims["orig_iat"] = mw.TimeFunc().Unix()
-	tokenString, err := mw.signedString(newToken)
+	tokenString, err := mw.signedString(AccessKey, newToken)
 	if err != nil {
 		return "", tokenString, time.Now(), err
 	}
@@ -613,7 +623,7 @@ func (mw *GinJWTMiddleware) RefreshToken(c *gin.Context) (string, string, time.T
 	refreshExpire := mw.TimeFunc().Add(mw.MaxRefresh)
 	newClaims["exp"] = refreshExpire.Unix()
 	newClaims["orig_iat"] = mw.TimeFunc().Unix()
-	refreshTokenString, err := mw.signedString(newToken)
+	refreshTokenString, err := mw.signedString(RefreshKey, newToken)
 
 	if err != nil {
 		return "", refreshTokenString, time.Now(), err
@@ -670,26 +680,26 @@ func (mw *GinJWTMiddleware) CheckIfTokenExpire(c *gin.Context) (jwt.MapClaims, e
 }
 
 // TokenGenerator method that clients can use to get a jwt token.
-func (mw *GinJWTMiddleware) TokenGenerator(data interface{}) (string, time.Time, error) {
-	token := jwt.New(jwt.GetSigningMethod(mw.SigningAlgorithm))
-	claims := token.Claims.(jwt.MapClaims)
+// func (mw *GinJWTMiddleware) TokenGenerator(data interface{}) (string, time.Time, error) {
+// 	token := jwt.New(jwt.GetSigningMethod(mw.SigningAlgorithm))
+// 	claims := token.Claims.(jwt.MapClaims)
 
-	if mw.PayloadFunc != nil {
-		for key, value := range mw.PayloadFunc(data) {
-			claims[key] = value
-		}
-	}
+// 	if mw.PayloadFunc != nil {
+// 		for key, value := range mw.PayloadFunc(data) {
+// 			claims[key] = value
+// 		}
+// 	}
 
-	expire := mw.TimeFunc().UTC().Add(mw.Timeout)
-	claims["exp"] = expire.Unix()
-	claims["orig_iat"] = mw.TimeFunc().Unix()
-	tokenString, err := mw.signedString(token)
-	if err != nil {
-		return "", time.Time{}, err
-	}
+// 	expire := mw.TimeFunc().UTC().Add(mw.Timeout)
+// 	claims["exp"] = expire.Unix()
+// 	claims["orig_iat"] = mw.TimeFunc().Unix()
+// 	tokenString, err := mw.signedString(token)
+// 	if err != nil {
+// 		return "", time.Time{}, err
+// 	}
 
-	return tokenString, expire, nil
-}
+// 	return tokenString, expire, nil
+// }
 
 func (mw *GinJWTMiddleware) jwtFromHeader(c *gin.Context, key string) (string, error) {
 	authHeader := c.Request.Header.Get(key)
